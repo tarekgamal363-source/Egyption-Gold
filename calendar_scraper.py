@@ -1,0 +1,355 @@
+"""
+calendar_scraper.py
+--------------------
+يجيب التقويم الاقتصادي الحقيقي (تقارير وقرارات أمريكا بشكل أساسي)
+من مصدر عام مجاني (ForexFactory feed)، ويحوّل التوقيت لتوقيت مصر،
+ويضيف شرح مبسط لكل حدث وأهميته بالنسبة للذهب.
+
+⚠️ ملاحظة مهمة:
+هذا المصدر مجاني وعام، لكنه بيدّي بس "القراءة السابقة" لكل حدث (مش آخر 5 قراءات).
+لعمل "آخر 5 قراءات واتجاه عام" حقيقي، محتاجين مصدر مدفوع (زي Trading Economics)
+أو نبني قاعدة بيانات بتخزن كل قراءة بنفسنا أسبوع بعد أسبوع لحد ما تتجمع 5 قراءات.
+
+المتطلبات:
+    pip install requests
+
+الاستخدام:
+    from calendar_scraper import get_calendar
+    data = get_calendar()
+"""
+
+import requests
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+FEED_URL_NEXT = "https://nfs.faireconomy.media/ff_calendar_nextweek.json"
+CAIRO_TZ = ZoneInfo("Africa/Cairo")
+NY_TZ = ZoneInfo("America/New_York")
+
+# مواعيد رسمية معلنة مسبقًا من مصادر أمريكا الحكومية نفسها (BLS + الفيدرالي)،
+# مش من فيد الأسبوع بس - عشان الصفحة تعرض شهور قدام مش أسبوع واحد بس.
+# المصدر: bls.gov/schedule و federalreserve.gov/monetarypolicy/fomccalendars.htm
+# ⚠️ الأرقام (forecast/previous) مش متاحة قبل الموعد بوقت طويل، هتظهر لاحقًا لما
+# نقرب من التاريخ (من فيد الأسبوع). دلوقتي بيظهر بس الموعد + الشرح.
+KNOWN_US_EVENTS = [
+    # (الاسم بالعربي, تاريخ ووقت أمريكا الشرقية, نوع الحدث للشرح, الأهمية)
+    ("قرار الفائدة الأمريكية (FOMC)", datetime(2026, 9, 16, 14, 0), "fed", "High"),
+    ("تقرير الوظائف الأمريكي (Employment Situation)", datetime(2026, 9, 4, 8, 30), "nfp", "High"),
+    ("مؤشر أسعار المستهلكين (CPI)", datetime(2026, 9, 11, 8, 30), "cpi", "High"),
+    ("مؤشر أسعار المنتجين (PPI)", datetime(2026, 9, 10, 8, 30), "ppi", "Medium"),
+
+    ("تقرير الوظائف الأمريكي (Employment Situation)", datetime(2026, 10, 2, 8, 30), "nfp", "High"),
+    ("مؤشر أسعار المستهلكين (CPI)", datetime(2026, 10, 14, 8, 30), "cpi", "High"),
+    ("مؤشر أسعار المنتجين (PPI)", datetime(2026, 10, 15, 8, 30), "ppi", "Medium"),
+    ("قرار الفائدة الأمريكية (FOMC)", datetime(2026, 10, 28, 14, 0), "fed", "High"),
+
+    ("تقرير الوظائف الأمريكي (Employment Situation)", datetime(2026, 11, 6, 8, 30), "nfp", "High"),
+    ("مؤشر أسعار المستهلكين (CPI)", datetime(2026, 11, 10, 8, 30), "cpi", "High"),
+    ("مؤشر أسعار المنتجين (PPI)", datetime(2026, 11, 13, 8, 30), "ppi", "Medium"),
+
+    ("تقرير الوظائف الأمريكي (Employment Situation)", datetime(2026, 12, 4, 8, 30), "nfp", "High"),
+    ("قرار الفائدة الأمريكية (FOMC)", datetime(2026, 12, 9, 14, 0), "fed", "High"),
+    ("مؤشر أسعار المستهلكين (CPI)", datetime(2026, 12, 10, 8, 30), "cpi", "High"),
+    ("مؤشر أسعار المنتجين (PPI)", datetime(2026, 12, 15, 8, 30), "ppi", "Medium"),
+
+    # يناير 2027 - موعد الفيدرالي معلن كـ"مبدئي" لسه، ممكن يتغير بفارق يوم أو اتنين
+    ("قرار الفائدة الأمريكية (FOMC) - موعد مبدئي", datetime(2027, 1, 27, 14, 0), "fed", "High"),
+]
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+}
+
+# شرح مبسط لكل نوع حدث + سبب تأثيره على الذهب (بحث بالكلمة المفتاحية في اسم الحدث)
+EXPLANATIONS = [
+    (["cpi", "consumer price index", "inflation"],
+     "مؤشر التضخم. ارتفاعه عن المتوقع بيرفع احتمال بقاء الفائدة مرتفعة، وده عادة بيضغط على الذهب لأنه أصل مايدرش فايدة."),
+    (["non-farm", "nonfarm", "nfp", "employment change", "employment situation", "unemployment claims", "unemployment rate"],
+     "بيانات سوق العمل الأمريكي. سوق عمل قوي بيدعم الدولار وبيضغط على الذهب، والعكس صحيح."),
+    (["fomc", "fed", "interest rate", "federal funds"],
+     "قرار أو تصريحات البنك المركزي الأمريكي بخصوص الفائدة. من أهم الأحداث المؤثرة على الذهب مباشرة."),
+    (["gdp"],
+     "الناتج المحلي الإجمالي. مؤشر لصحة الاقتصاد الأمريكي ككل، بيأثر على توقعات الفائدة وبالتالي الذهب."),
+    (["pce", "personal consumption"],
+     "مقياس التضخم المفضل عند البنك المركزي الأمريكي. بيأثر بشكل مباشر على قرارات الفائدة القادمة."),
+    (["retail sales"],
+     "مبيعات التجزئة. مؤشر على قوة الإنفاق الاستهلاكي، وبالتالي على صحة الاقتصاد وتوقعات الفائدة."),
+    (["pmi", "ism manufacturing", "ism services"],
+     "مؤشر مديري المشتريات. يعكس نشاط القطاع الصناعي أو الخدمي، ومؤشر مبكر لاتجاه الاقتصاد."),
+    (["ppi", "producer price"],
+     "مؤشر أسعار المنتجين، مؤشر تضخم مبكر بيسبق أثره أحيانًا مؤشر أسعار المستهلكين (CPI)."),
+    (["consumer confidence", "consumer sentiment"],
+     "مؤشر ثقة المستهلك. بيعكس نظرة الأمريكيين لاقتصادهم، وبيأثر على توقعات الإنفاق والفائدة."),
+]
+
+DEFAULT_EXPLANATION = "حدث اقتصادي أمريكي مهم بيتابعه المتداولون لأنه بيأثر على توقعات الفائدة والدولار، وبالتالي على سعر الذهب."
+
+# تصنيف كل نوع حدث: هل ارتفاع القيمة عن المتوقع "سلبي" على الذهب (لأنه بيقوي الدولار/يرفع
+# احتمال الفائدة) ولا "إيجابي" (لأنه بيدل على ضعف اقتصادي بيدعم الذهب كملاذ آمن)
+INVERSE_EVENTS = ["cpi", "consumer price", "ppi", "producer price", "gdp",
+                  "retail sales", "pmi", "ism manufacturing", "ism services",
+                  "non-farm", "nonfarm", "nfp", "employment change", "employment situation",
+                  "consumer confidence", "consumer sentiment", "pce", "personal consumption",
+                  "interest rate", "fomc", "fed"]
+DIRECT_EVENTS = ["unemployment rate", "unemployment claims", "jobless claims"]
+
+
+def _event_category(title: str):
+    t = title.lower()
+    if any(k in t for k in DIRECT_EVENTS):
+        return "direct"
+    if any(k in t for k in INVERSE_EVENTS):
+        return "inverse"
+    return None  # مش معروف نوعه، متحطش تفسير تلقائي
+
+
+def _gold_sentiment(category, comparison):
+    """
+    comparison: 'up' (القيمة الجديدة أعلى من المرجع) / 'down' (أقل) / 'flat' (زي بعض)
+    بترجع (النص, اللون المقترح)
+    """
+    if category is None or comparison is None:
+        return None
+
+    if comparison == "flat":
+        return ("حيادي على الذهب - القراءة زي المتوقع تمامًا", "neutral")
+
+    if category == "inverse":
+        if comparison == "up":
+            return ("سلبي على الذهب - رقم أقوى من المتوقع بيدعم الدولار ويقلل جاذبية الذهب", "negative")
+        else:
+            return ("إيجابي على الذهب - رقم أضعف من المتوقع بيدعم الذهب كملاذ آمن", "positive")
+    else:  # direct
+        if comparison == "up":
+            return ("إيجابي على الذهب - ضعف أكبر في سوق العمل بيدعم الذهب كملاذ آمن", "positive")
+        else:
+            return ("سلبي على الذهب - سوق عمل أقوى من المتوقع بيقلل جاذبية الذهب", "negative")
+
+
+def _explain(title: str) -> str:
+    t = title.lower()
+    for keywords, text in EXPLANATIONS:
+        if any(k in t for k in keywords):
+            return text
+    return DEFAULT_EXPLANATION
+
+
+def _parse_number(s):
+    if not s:
+        return None
+    s = str(s).replace("%", "").replace("K", "").replace(",", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _impact_arabic(impact: str) -> str:
+    mapping = {
+        "High": "عالي",
+        "Medium": "متوسط",
+        "Low": "منخفض",
+        "Holiday": "إجازة",
+    }
+    return mapping.get(impact, impact or "غير محدد")
+
+
+def _parse_event_datetime(date_str):
+    """
+    يحاول يقرأ التاريخ الراجع من المصدر بأي صيغة كانت (مش بس ISO)،
+    عشان لو المصدر غيّر شكل التاريخ الأحداث متختفيش كلها فجأة.
+    """
+    if not date_str:
+        return None
+
+    # المحاولة 1: صيغة ISO القياسية
+    try:
+        return datetime.fromisoformat(date_str)
+    except (ValueError, TypeError):
+        pass
+
+    # المحاولة 2: صيغ شائعة تانية للتاريخ والوقت الأمريكي
+    common_formats = [
+        "%m-%d-%Y %I:%M%p",
+        "%m/%d/%Y %I:%M%p",
+        "%Y-%m-%d %H:%M:%S",
+        "%m-%d-%Y %H:%M",
+    ]
+    for fmt in common_formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+
+    return None
+
+
+def get_calendar(min_impact="Low", countries=("USD",)):
+    """
+    min_impact: "Low" (كل حاجة) أو "Medium" أو "High" فقط
+    countries: قائمة العملات/الدول المطلوبة (افتراضيًا أمريكا فقط لأنها الأكثر تأثيرًا على الذهب)
+    """
+    raw_events = []
+    # نجيب أسبوع بعد أسبوع (نيوزويك) عشان لو دلوقتي ويكند ومفيش أحداث باقية
+    # في أسبوع النهارده، الصفحة متبقاش فاضية
+    for url in (FEED_URL, FEED_URL_NEXT):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=15)
+            resp.raise_for_status()
+            raw_events.extend(resp.json())
+        except Exception:
+            continue
+
+    impact_order = {"Low": 0, "Medium": 1, "High": 2, "Holiday": 0}
+    min_level = impact_order.get(min_impact, 0)
+
+    now = datetime.now(timezone.utc)
+    events = []
+    past_events = []
+
+    for e in raw_events:
+        if countries and e.get("country") not in countries:
+            continue
+        if impact_order.get(e.get("impact"), 0) < min_level:
+            continue
+
+        dt = _parse_event_datetime(e.get("date"))
+        if dt is None:
+            continue
+
+        # لو التاريخ الراجع من المصدر من غير فرق توقيت مكتوب (naive)،
+        # افترض إنه بتوقيت أمريكا الشرقية (ET) - ده المتعارف عليه في المصدر ده -
+        # قبل ما نحوّله لتوقيت مصر، عشان منجيش نحسبه غلط.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=NY_TZ)
+
+        dt_cairo = dt.astimezone(CAIRO_TZ)
+
+        forecast = _parse_number(e.get("forecast"))
+        previous = _parse_number(e.get("previous"))
+        actual = _parse_number(e.get("actual"))
+        trend = None
+        if forecast is not None and previous is not None:
+            if forecast > previous:
+                trend = "up"
+            elif forecast < previous:
+                trend = "down"
+            else:
+                trend = "flat"
+
+        category = _event_category(e.get("title", ""))
+
+        base_event = {
+            "title": e.get("title"),
+            "country": e.get("country"),
+            "impact": e.get("impact"),
+            "impact_ar": _impact_arabic(e.get("impact")),
+            "date_cairo": dt_cairo.strftime("%Y-%m-%d"),
+            "time_cairo": dt_cairo.strftime("%H:%M"),
+            "weekday_ar": ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"][dt_cairo.weekday()],
+            "forecast": e.get("forecast"),
+            "previous": e.get("previous"),
+            "actual": e.get("actual"),
+            "trend_forecast_vs_previous": trend,
+            "explanation": _explain(e.get("title", "")),
+        }
+
+        is_future = dt.astimezone(timezone.utc) >= now
+        if is_future:
+            # قبل الحدث: نتوقع التأثير بناءً على العلاقة بين المتوقع والقراءة السابقة
+            sentiment = _gold_sentiment(category, trend)
+            base_event["expected_gold_impact"] = sentiment[0] if sentiment else None
+            events.append(base_event)
+        else:
+            # بعد الحدث: نحسب التأثير الفعلي بمقارنة النتيجة الفعلية بالمتوقع
+            outcome_note = None
+            actual_vs_forecast = None
+            if actual is not None and forecast is not None:
+                if actual > forecast:
+                    outcome_note = "جاءت النتيجة الفعلية أعلى من المتوقع"
+                    actual_vs_forecast = "up"
+                elif actual < forecast:
+                    outcome_note = "جاءت النتيجة الفعلية أقل من المتوقع"
+                    actual_vs_forecast = "down"
+                else:
+                    outcome_note = "جاءت النتيجة الفعلية مطابقة للمتوقع"
+                    actual_vs_forecast = "flat"
+            else:
+                outcome_note = "لسه القيمة الفعلية متاحة، هتظهر تلقائيًا أول ما المصدر ينشرها"
+
+            sentiment = _gold_sentiment(category, actual_vs_forecast)
+            base_event["outcome_note"] = outcome_note
+            base_event["actual_gold_impact"] = sentiment[0] if sentiment else None
+            past_events.append(base_event)
+
+    # شيل التكرار لو نفس الحدث ظهر في الفيدين (نادر لكن ممكن عند حدود الأسبوع)
+    def _dedupe(evs):
+        seen = set()
+        result = []
+        for ev in evs:
+            key = (ev["title"], ev["date_cairo"], ev["time_cairo"])
+            if key not in seen:
+                seen.add(key)
+                result.append(ev)
+        return result
+
+    unique_events = _dedupe(events)
+    unique_events.sort(key=lambda x: (x["date_cairo"], x["time_cairo"]))
+
+    unique_past_events = _dedupe(past_events)
+    unique_past_events.sort(key=lambda x: (x["date_cairo"], x["time_cairo"]), reverse=True)
+    unique_past_events = unique_past_events[:15]  # آخر 15 حدث سابق بس
+
+    # ضيف المواعيد الرسمية المعروفة (شهور قدام) اللي لسه مفيش تفاصيل ليها في فيد الأسبوع
+    covered_dates_by_type = set()
+    for ev in unique_events:
+        t = ev["title"].lower()
+        if "cpi" in t or "consumer price" in t:
+            covered_dates_by_type.add(("cpi", ev["date_cairo"]))
+        elif "non-farm" in t or "nonfarm" in t or "employment" in t:
+            covered_dates_by_type.add(("nfp", ev["date_cairo"]))
+        elif "fomc" in t or "fed" in t or "interest rate" in t:
+            covered_dates_by_type.add(("fed", ev["date_cairo"]))
+        elif "ppi" in t or "producer price" in t:
+            covered_dates_by_type.add(("ppi", ev["date_cairo"]))
+
+    for name, dt_naive, event_type, impact in KNOWN_US_EVENTS:
+        dt_ny = dt_naive.replace(tzinfo=NY_TZ)
+        dt_cairo = dt_ny.astimezone(CAIRO_TZ)
+        if dt_ny.astimezone(timezone.utc) < now:
+            continue
+        date_cairo = dt_cairo.strftime("%Y-%m-%d")
+        if (event_type, date_cairo) in covered_dates_by_type:
+            continue  # فيد الأسبوع بيغطيه بتفاصيل أدق، متكررش
+
+        unique_events.append({
+            "title": name,
+            "country": "USD",
+            "impact": impact,
+            "impact_ar": _impact_arabic(impact),
+            "date_cairo": date_cairo,
+            "time_cairo": dt_cairo.strftime("%H:%M"),
+            "weekday_ar": ["الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد"][dt_cairo.weekday()],
+            "forecast": None,
+            "previous": None,
+            "actual": None,
+            "trend_forecast_vs_previous": None,
+            "explanation": _explain(name) + " (التفاصيل والتوقعات هتظهر هنا قبل الموعد بحوالي أسبوعين)",
+        })
+
+    unique_events.sort(key=lambda x: (x["date_cairo"], x["time_cairo"]))
+    return {
+        "source": FEED_URL,
+        "timezone": "Africa/Cairo",
+        "events": unique_events,
+        "past_events": unique_past_events,
+    }
+
+
+if __name__ == "__main__":
+    import json
+    print(json.dumps(get_calendar(), ensure_ascii=False, indent=2))
