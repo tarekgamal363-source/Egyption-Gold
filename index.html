@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0f14">
+<title>GoldPulse</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+.wrap{max-width:720px;margin:auto;padding:22px 16px 40px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+.logo{font-size:24px;font-weight:800}.logo span{color:#d7a83e}.status{font-size:12px;padding:7px 10px;border-radius:999px;background:#18221b;color:#7ee08c}
+.hero{background:linear-gradient(145deg,#171d25,#10151c);border:1px solid #252e39;border-radius:24px;padding:24px;margin-bottom:16px}
+.label{color:#9ba6b2;font-size:14px}.price{font-size:42px;font-weight:800;margin:7px 0}.unit,.muted{color:#9ba6b2;font-size:13px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.card{background:#121820;border:1px solid #252e39;border-radius:18px;padding:17px}.title{font-weight:700;margin-bottom:7px}.value{font-size:24px;font-weight:800}
+.section{font-size:19px;font-weight:800;margin:25px 3px 12px}.info{background:#121820;border:1px solid #252e39;border-radius:18px;padding:18px;line-height:1.8;color:#c9d0d8}
+.badge{display:inline-block;font-size:11px;padding:5px 8px;border-radius:8px;background:#202936;color:#b9c3ce;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top"><div class="logo">Gold<span>Pulse</span></div><div class="status" id="status">جاهز للربط</div></div>
+<div class="hero">
+<div class="label">سعر الذهب العالمي</div>
+<div class="price" id="goldPrice">—</div>
+<div class="unit">دولار أمريكي / أونصة</div>
+<div class="badge" id="updated">في انتظار البيانات الحقيقية</div>
+</div>
+<div class="section">العوامل الرئيسية</div>
+<div class="grid">
+<div class="card"><div class="title">الفضة</div><div class="value" id="silver">—</div><div class="muted">السعر العالمي</div></div>
+<div class="card"><div class="title">آخر تحديث</div><div class="value" id="age">—</div><div class="muted">وقت تحديث المصدر</div></div>
+</div>
+<div class="section">إزاي تستخدم GoldPulse؟</div>
+<div class="info">البرنامج لا يأخذ قرار الشراء أو البيع مكانك. هو يجمع أهم البيانات المؤثرة في الذهب، يشرحها بالعربي البسيط، ثم يساعدك تفهم هل البيانات تميل لدعم الذهب أم الضغط عليه.<br><br><b>البداية:</b> سنربط الذهب والفضة فعليًا، ثم نضيف باقي المؤشرات واحدة واحدة.</div>
+</div>
+<script>
+async function loadData(){
+ try{
+  const r=await fetch("data.json?"+Date.now(),{cache:"no-store"}); if(!r.ok) throw 0;
+  const d=await r.json();
+  if(d.gold?.price!=null) document.getElementById("goldPrice").textContent="$"+Number(d.gold.price).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+  if(d.silver?.price!=null) document.getElementById("silver").textContent="$"+Number(d.silver.price).toFixed(2);
+  if(d.updated_at){const dt=new Date(d.updated_at);document.getElementById("updated").textContent="آخر تحديث: "+dt.toLocaleString("ar-EG");document.getElementById("age").textContent=dt.toLocaleTimeString("ar-EG",{hour:"2-digit",minute:"2-digit"});}
+  document.getElementById("status").textContent="بيانات حقيقية";
+ }catch(e){document.getElementById("status").textContent="في انتظار البيانات";}
+}
+loadData();
+</script>
+</body></html>
