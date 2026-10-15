@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>حذف الحساب | Egyptian Gold</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{ --bg:#0b1020; --card:#141b30; --text:#f2ede0; --muted:#9aa2b8; --gold:#d4a94f; --line:rgba(212,169,79,.2); --red:#ef4b4b; --field:#1a2240; }
+  @media (prefers-color-scheme: light){ :root{ --bg:#f6f3ea; --card:#fff; --text:#1c2030; --muted:#5b6275; --gold:#8a6a1c; --line:rgba(0,0,0,.12); --field:#f1eee4; } }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:'Tajawal',sans-serif;line-height:1.8;font-size:15px}
+  main{max-width:480px;margin:0 auto;padding:24px 16px 48px}
+  h1{font-size:22px;margin:0 0 6px;color:var(--gold)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:14px}
+  .muted{color:var(--muted);font-size:13px}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input{width:100%;background:var(--field);border:1px solid var(--line);border-radius:12px;padding:12px;color:var(--text);font-family:inherit;font-size:15px}
+  button{width:100%;margin-top:12px;padding:13px;border-radius:12px;border:none;font-weight:800;font-family:inherit;font-size:15px;cursor:pointer}
+  .primary{background:var(--gold);color:#1a1305} .danger{background:var(--red);color:#fff}
+  .ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+  #msg{margin-top:10px;font-size:13px;min-height:20px} .err{color:var(--red)} .ok{color:#3ecf8e}
+  a{color:var(--gold)} [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1>حذف حساب Egyptian Gold</h1>
+  <p class="muted">من هنا تقدر تحذف حسابك وكل بياناتك من غير ما تفتح التطبيق. بيتحذف: حسابك، رسايلك وردودنا عليها، وإعدادات الإشعارات، نهائيًا ومينفعش التراجع. التفاصيل في <a href="privacy.html#delete">سياسة الخصوصية</a>.</p>
+
+  <div class="card" id="step-login">
+    <label for="email">البريد الإلكتروني</label>
+    <input id="email" type="email" autocomplete="email" inputmode="email" autocapitalize="off">
+    <label for="pw">كلمة المرور</label>
+    <input id="pw" type="password" autocomplete="current-password">
+    <button class="primary" id="btn-login">تسجيل الدخول بالإيميل</button>
+    <button class="ghost" id="btn-google">أو تسجيل الدخول بحساب Google</button>
+  </div>
+
+  <div class="card" id="step-confirm" hidden>
+    <p>مسجّل دخول بـ: <b id="who"></b></p>
+    <p class="muted">لما تضغط «حذف نهائي» هنمسح الحساب وكل بياناته فورًا.</p>
+    <button class="danger" id="btn-delete">حذف نهائي</button>
+    <button class="ghost" id="btn-cancel">إلغاء</button>
+  </div>
+
+  <div id="msg" role="status"></div>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script>
+  firebase.initializeApp({
+    apiKey: "AIzaSyBGripVpuKN3rV4rBADIif1-C6Ky_5qTVQ",
+    authDomain: "egyptian-gold-bca09.firebaseapp.com",
+    projectId: "egyptian-gold-bca09",
+    appId: "1:512434702040:web:ed0057ae74d4d8e8e9f9ad"
+  });
+  const auth = firebase.auth();
+  auth.languageCode = 'ar';
+  const $ = id => document.getElementById(id);
+  const msg = (t, cls) => { $('msg').textContent = t; $('msg').className = cls || ''; };
+
+  function errAr(e){
+    const c = e && e.code;
+    if (c === 'auth/invalid-credential' || c === 'auth/wrong-password' || c === 'auth/user-not-found') return 'الإيميل أو كلمة المرور غلط';
+    if (c === 'auth/invalid-email') return 'اكتب الإيميل صح';
+    if (c === 'auth/too-many-requests') return 'محاولات كتير، جرّب بعد شوية';
+    if (c === 'auth/popup-closed-by-user' || c === 'auth/cancelled-popup-request') return 'اتلغى تسجيل الدخول';
+    if (c === 'auth/network-request-failed') return 'مفيش اتصال بالإنترنت';
+    return 'حصلت مشكلة، جرّب تاني';
+  }
+  function showConfirm(user){
+    $('who').textContent = user.email || 'حساب Google';
+    $('step-login').hidden = true; $('step-confirm').hidden = false; msg('');
+  }
+
+  $('btn-login').onclick = async () => {
+    const email = $('email').value.trim(), pw = $('pw').value;
+    if (!email || !pw) return msg('اكتب الإيميل وكلمة المرور', 'err');
+    msg('جاري التحقق...');
+    try { const r = await auth.signInWithEmailAndPassword(email, pw); showConfirm(r.user); }
+    catch (e) { msg(errAr(e), 'err'); }
+  };
+  $('btn-google').onclick = async () => {
+    msg('جاري التحقق...');
+    try { const r = await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); showConfirm(r.user); }
+    catch (e) { msg(errAr(e), 'err'); }
+  };
+  $('btn-cancel').onclick = async () => {
+    try { await auth.signOut(); } catch (_) {}
+    $('step-confirm').hidden = true; $('step-login').hidden = false; msg('');
+  };
+  $('btn-delete').onclick = async () => {
+    const u = auth.currentUser;
+    if (!u) return;
+    $('btn-delete').disabled = true;
+    msg('جاري الحذف... (ممكن ياخد ثواني لو السيرفر كان نايم)');
+    try {
+      const tok = await u.getIdToken(true);
+      const res = await fetch('https://egyptian-gold.onrender.com/api/delete-account', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id_token: tok})
+      });
+      if (!res.ok) throw new Error('server');
+      try { await auth.signOut(); } catch (_) {}
+      $('step-confirm').hidden = true;
+      msg('تم حذف حسابك وكل بياناتك نهائيًا ✅', 'ok');
+    } catch (e) {
+      msg('حصلت مشكلة وماتحذفش الحساب، جرّب تاني بعد شوية.', 'err');
+      $('btn-delete').disabled = false;
+    }
+  };
+</script>
+</body>
+</html>
