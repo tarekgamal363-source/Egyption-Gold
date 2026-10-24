@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // صاحب التطبيق فقط (حسابك أنت)
+    function isAdmin() {
+      return request.auth != null && request.auth.uid == 'z8Qsa9itzKTZu6IbKau8BDUUbdt2';
+    }
+
+    match /complaints/{complaintId} {
+      // أي مستخدم مسجل يبعت رسالة باسمه هو بس
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+
+      // المستخدم يشوف رسايله هو بس، وصاحب التطبيق يشوف الكل
+      allow read: if request.auth != null
+                  && (resource.data.uid == request.auth.uid || isAdmin());
+
+      // صاحب التطبيق بس يقدر يرد، ومينفعش يعدل غير حقلي الرد
+      allow update: if isAdmin()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reply', 'replied_at']);
+
+      // المستخدم يمسح رسايله هو، وصاحب التطبيق يمسح أي رسالة
+      allow delete: if request.auth != null
+                    && (resource.data.uid == request.auth.uid || isAdmin());
+    }
+
+    // اشتراك الإشعارات: كل مستخدم يقرا ويكتب مستند اشتراكه هو بس
+    match /push_subscribers/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow create, update: if request.auth != null
+                            && request.auth.uid == uid
+                            && request.resource.data.uid == uid;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}
