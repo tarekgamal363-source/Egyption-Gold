@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PKG: com.egyptiangold.app
-      ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID || 'ca-app-pub-3940256099942544~3347511713' }}
+      ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID || 'ca-app-pub-2010886671097018~7728524112' }}
       GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
