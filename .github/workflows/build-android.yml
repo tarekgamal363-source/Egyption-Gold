@@ -56,7 +56,7 @@ jobs:
           cat > capacitor.config.json <<EOF
           {
             "appId": "$PKG",
-            "appName": "الذهب المصري",
+            "appName": "Egyptian Gold",
             "webDir": "www",
             "backgroundColor": "#0c1120",
             "android": { "adjustMarginsForEdgeToEdge": "force" },
