@@ -1,1 +1,189 @@
+name: Build Android (APK + AAB)
 
+on:
+  workflow_dispatch:
+    inputs:
+      ads_test:
+        description: "نسخة اختبار بإعلانات تجريبية (للتجربة فقط، لا ترفعها على جوجل بلاي)"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      PKG: com.egyptiangold.app
+      ADMOB_APP_ID: ${{ vars.ADMOB_APP_ID || 'ca-app-pub-2010886671097018~7728524112' }}
+      GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Check secrets
+        run: |
+          [ -n "$GOOGLE_SERVICES_JSON" ] || { echo "::error::السر GOOGLE_SERVICES_JSON ناقص"; exit 1; }
+          [ -n "$KEYSTORE_BASE64" ] || { echo "::error::السر KEYSTORE_BASE64 ناقص"; exit 1; }
+          [ -n "$KEYSTORE_PASSWORD" ] || { echo "::error::السر KEYSTORE_PASSWORD ناقص"; exit 1; }
+          [ -f index.html ] || { echo "::error::index.html مش موجود في جذر الريبو"; exit 1; }
+
+      - name: Create Capacitor project
+        run: |
+          mkdir -p build/www
+          cd build
+          cat > package.json <<'EOF'
+          {
+            "name": "egyptian-gold-android",
+            "version": "1.0.0",
+            "private": true,
+            "dependencies": {
+              "@capacitor/core": "^7.0.0",
+              "@capacitor/android": "^7.0.0",
+              "@capacitor/push-notifications": "^7.0.0",
+              "@capacitor-community/admob": "^7.0.0",
+              "@capacitor-firebase/authentication": "^7.0.0",
+              "firebase": "^11.0.0"
+            },
+            "devDependencies": {
+              "@capacitor/cli": "^7.0.0"
+            }
+          }
+          EOF
+          cat > capacitor.config.json <<EOF
+          {
+            "appId": "$PKG",
+            "appName": "الذهب المصري",
+            "webDir": "www",
+            "backgroundColor": "#0c1120",
+            "android": { "adjustMarginsForEdgeToEdge": "force" },
+            "plugins": {
+              "FirebaseAuthentication": { "skipNativeAuth": true, "providers": ["google.com"] }
+            }
+          }
+          EOF
+          npm install --legacy-peer-deps
+          cp ../index.html ../privacy.html ../delete-account.html ../manifest.json www/
+          cp ../*.png www/ 2>/dev/null || true
+          if [ "${{ inputs.ads_test }}" = "true" ]; then
+            sed -i "s/const ADMOB_TESTING = false;/const ADMOB_TESTING = true;/" www/index.html
+            grep -c "const ADMOB_TESTING = true;" www/index.html
+          fi
+          npx cap add android
+          printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+          python3 -c "import json;d=json.load(open('android/app/google-services.json'));assert d['client'][0]['client_info']['android_client_info']['package_name']=='$PKG';print('google-services OK')"
+
+      - name: Patch Android project (manifest, icons, version)
+        run: |
+          pip install pillow
+          cd build/android
+          python3 - <<'PY'
+          import os, re, glob
+          from PIL import Image
+          pkg = os.environ["PKG"]; admob = os.environ["ADMOB_APP_ID"]
+          # ----- AndroidManifest -----
+          mp = "app/src/main/AndroidManifest.xml"
+          m = open(mp, encoding="utf-8").read()
+          meta = f'''
+              <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="{admob}"/>
+              <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_gold"/>
+              <meta-data android:name="com.google.firebase.messaging.default_notification_color" android:resource="@color/notif_color"/>
+              <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="default"/>
+          '''
+          m = m.replace("</application>", meta + "</application>")
+          if "POST_NOTIFICATIONS" not in m:
+              m = m.replace("<application", '<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <application', 1)
+          open(mp, "w", encoding="utf-8").write(m)
+‎          # ----- ألوان -----
+          os.makedirs("app/src/main/res/values", exist_ok=True)
+          open("app/src/main/res/values/notif_color.xml", "w").write('<?xml version="1.0" encoding="utf-8"?>\n<resources><color name="notif_color">#D4A94C</color></resources>\n')
+          open("app/src/main/res/values/ic_launcher_background.xml", "w").write('<?xml version="1.0" encoding="utf-8"?>\n<resources><color name="ic_launcher_background">#0C1120</color></resources>\n')
+          # ----- variables.gradle: دخول جوجل -----
+          vp = "variables.gradle"
+          v = open(vp).read()
+          if "rgcfaIncludeGoogle" not in v:
+              v = re.sub(r"ext\s*\{", "ext {\n    rgcfaIncludeGoogle = true", v, count=1)
+              open(vp, "w").write(v)
+‎          # ----- الأيقونات -----
+          src = Image.open("../www/icon-512.png").convert("RGB")
+          bg = (12, 17, 32)
+          res = "app/src/main/res"
+          for d, sz in {"mdpi":108,"hdpi":162,"xhdpi":216,"xxhdpi":324,"xxxhdpi":432}.items():
+              folder = f"{res}/mipmap-{d}"
+              if not os.path.isdir(folder): continue
+              fg = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
+              inner = int(sz * 0.62)
+              fg.paste(src.resize((inner, inner), Image.LANCZOS), ((sz-inner)//2, (sz-inner)//2))
+              fg.save(f"{folder}/ic_launcher_foreground.png")
+          for d, sz in {"mdpi":48,"hdpi":72,"xhdpi":96,"xxhdpi":144,"xxxhdpi":192}.items():
+              folder = f"{res}/mipmap-{d}"
+              if not os.path.isdir(folder): continue
+              for name in ("ic_launcher.png", "ic_launcher_round.png"):
+                  src.resize((sz, sz), Image.LANCZOS).save(f"{folder}/{name}")
+‎          # أيقونة الإشعار الصغيرة (أبيض على شفاف)
+          crop = src.crop((70, 25, 455, 395)).convert("L")
+          alpha = crop.point(lambda x: 0 if x < 70 else min(255, int((x-70)*3.2)))
+          for d, sz in {"mdpi":24,"hdpi":36,"xhdpi":48,"xxhdpi":72,"xxxhdpi":96}.items():
+              folder = f"{res}/drawable-{d}"
+              os.makedirs(folder, exist_ok=True)
+              a = alpha.resize((sz, int(sz*alpha.size[1]/alpha.size[0])), Image.LANCZOS)
+              out = Image.new("RGBA", (sz, sz), (255, 255, 255, 0))
+              w = Image.new("RGBA", a.size, (255, 255, 255, 0)); w.putalpha(a)
+              out.alpha_composite(w, (0, (sz - a.size[1])//2))
+              out.save(f"{folder}/ic_stat_gold.png")
+‎          # شاشة البداية
+          for f in glob.glob(f"{res}/drawable*/splash.png"):
+              w, h = Image.open(f).size
+              sp = Image.new("RGB", (w, h), bg)
+              s = int(min(w, h) * 0.38)
+              sp.paste(src.resize((s, s), Image.LANCZOS), ((w-s)//2, (h-s)//2))
+              sp.save(f)
+          print("patched")
+          PY
+‎          # رقم النسخة يزيد مع كل بناء
+          sed -i -E "s/versionCode [0-9]+/versionCode ${{ github.run_number }}/" app/build.gradle
+          sed -i -E "s/versionName \"[^\"]*\"/versionName \"1.0.${{ github.run_number }}\"/" app/build.gradle
+          grep -n "versionCode\|versionName" app/build.gradle
+‎          # جوجل بلاي بتطلب Android 16 (API 36) للتطبيقات الجديدة
+          sed -i -E "s/(compileSdkVersion|targetSdkVersion) = [0-9]+/\1 = 36/" variables.gradle
+          sed -i -E "/com.android.tools.build:gradle/ s/gradle:[0-9.]+/gradle:8.9.1/" build.gradle
+          sed -i -E "s#gradle-[0-9.]+-(bin|all)\.zip#gradle-8.11.1-\1.zip#" gradle/wrapper/gradle-wrapper.properties
+          grep -n "SdkVersion" variables.gradle
+          grep -n "tools.build" build.gradle
+          grep -n "distributionUrl" gradle/wrapper/gradle-wrapper.properties
+
+      - name: Sync + build
+        run: |
+          cd build
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease bundleRelease
+
+      - name: Sign
+        run: |
+          cd build/android
+          echo "$KEYSTORE_BASE64" | base64 -d > upload.jks
+          keytool -list -v -keystore upload.jks -storepass "$KEYSTORE_PASSWORD" -alias upload | grep -E "SHA1|SHA256" || true
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          $BT/apksigner sign --ks upload.jks --ks-key-alias upload --ks-pass env:KEYSTORE_PASSWORD \
+            --out ../../egyptian-gold.apk app/build/outputs/apk/release/app-release-unsigned.apk
+          cp app/build/outputs/bundle/release/app-release.aab ../../egyptian-gold.aab
+          jarsigner -keystore upload.jks -storepass "$KEYSTORE_PASSWORD" -sigalg SHA256withRSA -digestalg SHA-256 ../../egyptian-gold.aab upload
+          rm upload.jks
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.ads_test && 'egyptian-gold-TEST-ADS-do-not-publish' || 'egyptian-gold-android' }}
+          path: |
+            egyptian-gold.apk
+            egyptian-gold.aab
+          retention-days: 30
