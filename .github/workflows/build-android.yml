@@ -154,6 +154,7 @@ jobs:
           grep -n "versionCode\|versionName" app/build.gradle
           # Google Play requires Android 16 (API 36) for new apps
           sed -i -E "s/(compileSdkVersion|targetSdkVersion) = [0-9]+/\1 = 36/" variables.gradle
+          sed -i -E "s/minSdkVersion = [0-9]+/minSdkVersion = 24/" variables.gradle
           sed -i -E "/com.android.tools.build:gradle/ s/gradle:[0-9.]+/gradle:8.9.1/" build.gradle
           sed -i -E "s#gradle-[0-9.]+-(bin|all)\.zip#gradle-8.11.1-\1.zip#" gradle/wrapper/gradle-wrapper.properties
           grep -n "SdkVersion" variables.gradle
@@ -186,5 +187,4 @@ jobs:
           path: |
             egyptian-gold.apk
             egyptian-gold.aab
-          retention-days: 30 
-          
+          retention-days: 30
