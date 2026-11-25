@@ -159,15 +159,37 @@ def get_bullion_detail(kind: str, weight_label: str, company_name: str):
     resp.raise_for_status()
     text = BeautifulSoup(resp.text, "html.parser").get_text(" ", strip=True)
 
-    sell_m = re.search(r"يبلغ\s*([\d,]+\.?\d*)\s*جنيه", text)
-    buyback_m = re.search(r"اعادة البيع\s*([\d,]+\.?\d*)\s*جنيه", text)
-    fee_m = re.search(r"مصنعية يساوي\s*([\d,]+\.?\d*)\s*جنيه", text)
-    cashback_m = re.search(r"كاش باك\s*([\d,]+\.?\d*)\s*جنيه", text)
+    NUM = r"([\d,]+(?:\.\d+)?)"
 
-    sell = _clean_number(sell_m.group(1)) if sell_m else None
-    buyback = _clean_number(buyback_m.group(1)) if buyback_m else None
-    fee_per_gram = _clean_number(fee_m.group(1)) if fee_m else None
-    cashback_per_gram = _clean_number(cashback_m.group(1)) if cashback_m else None
+    def _first(patterns):
+        """يجرب الأنماط بالترتيب (القديمة ثم الجديدة) ويرجّع أول رقم لاقاه"""
+        for p in patterns:
+            m = re.search(p, text)
+            if m:
+                v = _clean_number(m.group(1))
+                if v is not None:
+                    return v
+        return None
+
+    # الموقع غيّر الصفحة: الأرقام بقت في جدول "اسم الحقل | القيمة" بدل جمل كاملة.
+    # بنجرب الشكل الجديد (الجدول) الأول، وبعده الجمل القديمة كاحتياطي.
+    sell = _first([
+        r"سعر\s*(?:السبيكة|الجنيه|العملة|القطعة)\s*" + NUM,
+        r"يبلغ\s*" + NUM + r"\s*جنيه",
+        r"(?:جرام|جنيه ذهب)[^\d]{0,40}" + NUM + r"\s*جنيه",   # وصف الصفحة المختصر
+    ])
+    buyback = _first([
+        r"سعر\s*إعادة\s*البيع\s*" + NUM,
+        r"اعادة البيع\s*" + NUM + r"\s*جنيه",
+    ])
+    fee_per_gram = _first([
+        r"سعر\s*المصنعية\s*للجرام\s*" + NUM,
+        r"مصنعية يساوي\s*" + NUM + r"\s*جنيه",
+    ])
+    cashback_per_gram = _first([
+        r"الكاش\s*باك\s*" + NUM,
+        r"كاش باك\s*" + NUM + r"\s*جنيه",
+    ])
 
     weight_value = float(weight_token)
     gold_price = None
